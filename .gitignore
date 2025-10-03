@@ -1,29 +1,7 @@
-# Pythonのキャッシュ類
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-
-# PyInstallerのビルド成果物
-/dist/
-/build/
+﻿dist/
+build/
 *.spec
-
-# ログファイル
-*.log
-
-# バージョン付きログ
-*.log.*
-
-# 実行ファイル
-*.exe
-
-# VSCodeなどIDE設定（任意）
-.vscode/
-*.code-workspace
-
-# その他一時ファイル
-*.tmp
+__pycache__/
+*.pyc
+*.pyo
 *.bak
-.DS_Store
-Thumbs.db
