@@ -25,7 +25,7 @@ except Exception:
     win32con = None
 
 def is_valid_tiff(filename):
-    # bip<0-5>-output-1bpp-<繝壹・繧ｸ逡ｪ蜿ｷ>.tif 縺ｫ繝槭ャ繝√☆繧九°
+    # bip<0-5>-output-1bpp-<ページ番号>.tif にマッチするか
     pattern = r"^bip([0-5])-output-1bpp-([1-9][0-9]*)\.tif$"
     return re.match(pattern, filename, re.IGNORECASE)
 
@@ -83,13 +83,15 @@ def ensure_log_directory(log_dir):
 def is_file_ready_for_deletion(filepath):
     """Check if file is ready for deletion with minimal I/O"""
     try:
-        # 1蝗槭・繝輔ぃ繧､繝ｫ繧ｪ繝ｼ繝励Φ縺ｧ蠢・ｦ√↑諠・ｱ繧貞叙蠕・        stats = os.stat(filepath)
+        # 1回のファイルオープンで必要な情報を取得
+        stats = os.stat(filepath)
         
-        # 繧ｵ繧､繧ｺ繝√ぉ繝・け
+        # サイズチェック
         if stats.st_size == 0:
             return False
             
-        # 譛邨よ峩譁ｰ譎ょ綾繝√ぉ繝・け・・0遘剃ｻ･荳顔ｵ碁℃縺励◆繝輔ぃ繧､繝ｫ縺ｮ縺ｿ蟇ｾ雎｡・・        if time.time() - stats.st_mtime < 30:
+        # 最終更新時刻チェック（30秒以上経過したファイルのみ対象）
+        if time.time() - stats.st_mtime < 30:
             return False
             
         return True
@@ -123,13 +125,14 @@ def delete_matching_files(rip_name, path, log_dir):
             full_path = os.path.join(path, filename)
             
             try:
-                # 繝輔ぃ繧､繝ｫ縺ｮ蟄伜惠縺ｨ繧ｵ繧､繧ｺ繧剃ｸ蠎ｦ縺縺代メ繧ｧ繝・け
+                # ファイルの存在とサイズを一度だけチェック
                 if os.path.getsize(full_path) == 0:
                     print(f"[{rip_name}] Skipped (Empty file): {filename}")
                     skipped_files.append((filename, "Empty file"))
                     continue
 
-                # 蜑企勁繧定ｩｦ陦・                if delete_with_retry(full_path, RETRY_MAX_ATTEMPTS, RETRY_DELAY_SECONDS):
+                # 削除を試行
+                if delete_with_retry(full_path, RETRY_MAX_ATTEMPTS, RETRY_DELAY_SECONDS):
                     deleted_files.append(filename)
                     print(f"[{rip_name}] Deleted: {filename}")
                 else:
@@ -140,10 +143,11 @@ def delete_matching_files(rip_name, path, log_dir):
                 print(f"[{rip_name}] Skipped (In use): {filename}")
                 skipped_files.append((filename, "In use"))
             except Exception as e:
-                print(f"[{rip_name}] Error: {filename} 竊・{e}")
+                print(f"[{rip_name}] Error: {filename} → {e}")
                 skipped_files.append((filename, f"Error: {e}"))
 
-    if deleted_files or skipped_files:  # 蜑企勁縺ｾ縺溘・繧ｹ繧ｭ繝・・縺励◆繝輔ぃ繧､繝ｫ縺後≠繧句ｴ蜷・        log_filename = f"{now}_{rip_name}.log"
+    if deleted_files or skipped_files:  # 削除またはスキップしたファイルがある場合
+        log_filename = f"{now}_{rip_name}.log"
         log_path = os.path.join(log_dir, log_filename)
         write_detailed_log(log_path, deleted_files, skipped_files)
     else:
@@ -167,9 +171,11 @@ def write_detailed_log(log_path, deleted_files, skipped_files):
 def get_config_path():
     """Get the config.ini path relative to the executable"""
     if getattr(sys, 'frozen', False):
-        # PyInstaller縺ｧ繝薙Ν繝峨＆繧後◆蝣ｴ蜷・        config_path = os.path.join(os.path.dirname(sys.executable), "config.ini")
+        # PyInstallerでビルドされた場合
+        config_path = os.path.join(os.path.dirname(sys.executable), "config.ini")
     else:
-        # 騾壼ｸｸ縺ｮPython螳溯｡後・蝣ｴ蜷・        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.ini")
+        # 通常のPython実行の場合
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.ini")
     
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
@@ -196,7 +202,7 @@ def run_for_rip(config, rip_name):
 
         log_dir = config["General"].get("log_dir", "")
         if log_dir:
-            # 繝ｭ繧ｰ繝・ぅ繝ｬ繧ｯ繝医Μ縺悟ｭ伜惠縺吶ｋ蝣ｴ蜷医∝商縺・Ο繧ｰ繧呈ｸ・祉
+            # ログディレクトリが存在する場合、古いログを清掃
             cleanup_old_logs(log_dir)
 
         delete_matching_files(rip_name, path, log_dir)
@@ -222,7 +228,7 @@ def run_kick_mode(config, target):
         run_for_rip(config, target)
 
 def delete_with_retry(file_path, max_retries=3, retry_delay=1):
-    """繝ｪ繝医Λ繧､讖溯・莉倥″繝輔ぃ繧､繝ｫ蜑企勁"""
+    """リトライ機能付きファイル削除"""
     for attempt in range(max_retries):
         try:
             os.remove(file_path)
@@ -231,9 +237,11 @@ def delete_with_retry(file_path, max_retries=3, retry_delay=1):
             if attempt < max_retries - 1:
                 time.sleep(retry_delay)
                 continue
-            # 譛邨ょ､ｱ謨玲凾縺ｯ萓句､悶ｒ蜀阪せ繝ｭ繝ｼ縺帙★ False 繧定ｿ斐☆・亥他縺ｳ蜃ｺ縺怜・縺ｧ繧ｹ繧ｭ繝・・蜃ｦ逅・☆繧具ｼ・            return False
+            # 最終失敗時は例外を再スローせず False を返す（呼び出し側でスキップ処理する）
+            return False
         except FileNotFoundError:
-            # 譌｢縺ｫ蜑企勁縺輔ｌ縺ｦ縺・ｋ蝣ｴ蜷医・謌仙粥謇ｱ縺・            return True
+            # 既に削除されている場合は成功扱い
+            return True
     return False
 
 def validate_config(config):
@@ -256,11 +264,12 @@ def validate_config(config):
                 raise ValueError(f"'path' is required in {rip}")
 
 def cleanup_old_logs(log_dir, days_to_keep=30):
-    """蜿､縺・Ο繧ｰ繝輔ぃ繧､繝ｫ繧貞炎髯､"""
+    """古いログファイルを削除"""
     if not log_dir:
         return
     if not os.path.isdir(log_dir):
-        # 繝ｭ繧ｰ繝・ぅ繝ｬ繧ｯ繝医Μ縺後↑縺代ｌ縺ｰ菴輔ｂ縺励↑縺・ｼ亥､夜Κ繝ｭ繧ｰ隗｣譫舌ヤ繝ｼ繝ｫ縺ｨ縺ｮ謨ｴ蜷域ｧ繧堤ｶｭ謖・ｼ・        return
+        # ログディレクトリがなければ何もしない（外部ログ解析ツールとの整合性を維持）
+        return
     current_time = datetime.now()
     try:
         entries = os.listdir(log_dir)
@@ -274,13 +283,13 @@ def cleanup_old_logs(log_dir, days_to_keep=30):
             try:
                 file_time = datetime.fromtimestamp(os.path.getctime(file_path))
             except Exception:
-                # 繝輔ぃ繧､繝ｫ繝｡繧ｿ諠・ｱ蜿門ｾ励↓螟ｱ謨励＠縺溘ｉ繧ｹ繧ｭ繝・・
+                # ファイルメタ情報取得に失敗したらスキップ
                 continue
             if (current_time - file_time).days > days_to_keep:
                 try:
                     os.remove(file_path)
                 except Exception as e:
-                    print(f"Failed to delete old log: {filename} 竊・{e}")
+                    print(f"Failed to delete old log: {filename} → {e}")
 
 def disable_quick_edit():
     """Disable QuickEdit mode so console selection doesn't pause the process."""
@@ -298,7 +307,8 @@ def disable_quick_edit():
             new_mode |= ENABLE_EXTENDED_FLAGS         # required to apply change reliably
             kernel32.SetConsoleMode(hStdin, new_mode)
     except Exception:
-        # 髱杆indows迺ｰ蠅・ｄ螟ｱ謨玲凾縺ｯ辟｡隕厄ｼ亥ｮ牙・蛛ｴ・・        pass
+        # 非Windows環境や失敗時は無視（安全側）
+        pass
 
 def main():
     disable_quick_edit()
@@ -310,9 +320,11 @@ def main():
     
     config = load_config()
     
-    # 繧ｭ繝・け繝｢繝ｼ繝峨・蜃ｦ逅・    if len(sys.argv) >= 3 and sys.argv[1] == "--kick":
+    # キックモードの処理
+    if len(sys.argv) >= 3 and sys.argv[1] == "--kick":
         run_kick_mode(config, sys.argv[2])
-    # 繝昴・繝ｪ繝ｳ繧ｰ繝｢繝ｼ繝会ｼ医ョ繝輔か繝ｫ繝茨ｼ・    else:
+    # ポーリングモード（デフォルト）
+    else:
         run_polling_mode(config)
 
 if __name__ == "__main__":
@@ -321,5 +333,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Unexpected error occurred: {e}")
         sys.exit(1)
+
 
 
