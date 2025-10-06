@@ -7,8 +7,6 @@ from datetime import datetime
 import ctypes
 from ctypes import wintypes
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
-import uuid
 
 # Constants
 APP_NAME = "ripCleaner"          # <-- set your new app name here
@@ -177,7 +175,8 @@ def delete_matching_files(rip_name, path, log_dir, summary_console=False):
             print(m)
 
     if deleted_files or skipped_files:  # 削除またはスキップしたファイルがある場合
-        log_path = _make_log_path(log_dir, rip_name)
+        log_filename = f"{now}_{rip_name}.log"
+        log_path = os.path.join(log_dir, log_filename)
         write_detailed_log(log_path, deleted_files, skipped_files)
     else:
         print(f"[{rip_name}] No files to delete.")
@@ -186,7 +185,7 @@ def write_detailed_log(log_path, deleted_files, skipped_files):
     """Write detailed log; exit if writing fails because logs are required."""
     try:
         with open(log_path, "w", encoding="utf-8") as log_file:
-            log_file.write(f"Execution time: {datetime.now().strftime(DETAILED_DATETIME_FORMAT)}\n")
+            log_file.write(f"Execution time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             log_file.write("\n=== Deleted Files ===\n")
             for name in deleted_files:
                 log_file.write(f"{name}\n")
@@ -240,39 +239,27 @@ def run_for_rip(config, rip_name):
     else:
         print(f"[{rip_name}] Disabled.")
 
-def _make_log_path(log_dir, rip_name):
-    # UUID を付与して同時書き込み衝突を完全回避
-    now = datetime.now().strftime(LOG_DATETIME_FORMAT + "_%f")
-    unique = uuid.uuid4().hex[:8]
-    filename = f"{now}_{rip_name}_{unique}.log"
-    return os.path.join(log_dir, filename)
-
 def run_polling_mode(config):
     interval = config["General"].getfloat("polling_interval", fallback=DEFAULT_POLLING_INTERVAL)
     parallel_enabled = config["General"].getboolean("parallel", fallback=False)
     summary_console = config["General"].getboolean("summary_console", fallback=False)
 
     if parallel_enabled:
-        # create one dedicated thread per RIP
         workers = len(VALID_RIPS)
-        print(f"Started in polling mode (parallel, dedicated workers). Running every {interval} minutes. workers={workers} summary_console={summary_console}")
-        stop_event = threading.Event()
-        threads = []
+        print(f"Started in polling mode (parallel). Running every {interval} minutes. workers={workers} summary_console={summary_console}")
         try:
-            for rip in VALID_RIPS:
-                t = threading.Thread(target=_rip_worker, args=(stop_event, config, rip, interval, summary_console), name=f"worker-{rip}", daemon=True)
-                t.start()
-                threads.append(t)
-            # main thread waits until Ctrl+C
-            while not stop_event.is_set():
-                time.sleep(1)
+            while True:
+                with ThreadPoolExecutor(max_workers=workers) as ex:
+                    futures = {ex.submit(run_for_rip, config, rip): rip for rip in VALID_RIPS}
+                    for fut in as_completed(futures):
+                        rip = futures[fut]
+                        try:
+                            fut.result()
+                        except Exception as e:
+                            print(f"[{rip}] Thread error: {e}")
+                time.sleep(interval * 60)
         except KeyboardInterrupt:
-            stop_event.set()
-            print("Polling interrupted. Waiting for workers to stop...")
-        finally:
-            for t in threads:
-                t.join(timeout=5)
-            print("All workers stopped.")
+            print("Polling interrupted.")
     else:
         print(f"Started in polling mode (sequential). Running every {interval} minutes. summary_console={summary_console}")
         try:
@@ -372,22 +359,6 @@ def disable_quick_edit():
     except Exception:
         # 非Windows環境や失敗時は無視（安全側）
         pass
-
-def _rip_worker(loop_event, config, rip_name, interval, summary_console):
-    """Dedicated worker loop for a single RIP."""
-    while not loop_event.is_set():
-        try:
-            # run_for_rip は delete_matching_files を呼び出す（summary_console を config から渡している）
-            run_for_rip(config, rip_name)
-        except Exception as e:
-            print(f"[{rip_name}] Worker error: {e}")
-        # sleep in small increments to allow prompt shutdown
-        total = interval * 60
-        slept = 0.0
-        step = 0.5
-        while slept < total and not loop_event.is_set():
-            time.sleep(step)
-            slept += step
 
 def main():
     disable_quick_edit()
